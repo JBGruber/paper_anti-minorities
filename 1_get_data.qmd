@@ -1,0 +1,282 @@
+---
+title: 1_get_data
+author: Johannes B. Gruber
+date: today
+format:
+  html:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+---
+
+# Introduction
+
+Our goal is to find out whether we can identify the weaponization of LGBTQ+ rights in party communication.
+For this, we download data from the Guardian API.
+We want articles that mention LGBTQ+ rights and a party or a politician affiliated with a party.
+
+## Packages
+
+I use httr2 to pull articles from the Guardian API.
+
+```{r setup}
+#| include: false
+library(tidyverse)
+library(glue)
+library(httr2)
+start <- Sys.time() # note start time for later
+```
+
+## Functions
+
+I write a couple of functions which effectively pull data from the Guardian API
+
+```{r}
+#| code-fold: true
+# function to perform a search
+search_guardian <- function(q, initial_page = 1L, max_pages = Inf, key) {
+  # initial request
+  resp <- base_req_search_guardian(q, p = initial_page, key = key) |>
+    req_perform()
+
+    resps <- list(resp)
+  info <- resp_body_json(resp) |>
+    pluck("response")
+
+  message("Found ", info$total, "articles to download")
+
+  pgs <- seq_len(info$pages) |>
+    tail(-initial_page) |>
+    head(max_pages - 1L)
+
+  req_list <- map(pgs, function(p) {
+    base_req_search_guardian(q, p = p, key = key)
+  })
+
+  resps <- c(
+    resps,
+    # req_perform_parallel(req_list, on_error = "return")
+    req_perform_sequential(req_list, on_error = "return")
+  )
+
+  return(resps)
+}
+
+# in the first iteration, I still wanted data from the NYT as well, but the API does not deliver full text
+search_nyt <- function(q, initial_page = 1L, max_pages = Inf, key) {
+  # initial request
+  resp <- base_req_search_nyt(q, p = initial_page, key = key) |>
+    req_perform()
+
+  resps <- list(resp)
+  info <- resp_body_json(resp) |>
+    pluck("response", "meta")
+
+  message("Found ", info$hits, "articles to download")
+
+  pgs <- ceiling(info$hits / 10) |>
+    seq_len() |>
+    tail(-initial_page) |>
+    head(max_pages - 1L)
+
+  req_list <- map(pgs, function(p) {
+    base_req_search_nyt(q, p = p, key = key)
+  })
+
+  resps <- c(
+    resps,
+    # req_perform_parallel(req_list, on_error = "return")
+    req_perform_sequential(req_list, on_error = "return")
+  )
+
+  return(resps)
+}
+
+
+# helper function to construct base search request
+base_req_search_guardian <- function(q, p, key) {
+  request("https://content.guardianapis.com") |>
+    req_url_path("search") |>
+    req_timeout(seconds = 60) |>
+    req_url_query(
+      q = q,
+      page = p,
+      "show-blocks" = "all"
+    ) |>
+    req_url_query(
+      "api-key" = key
+    ) |>
+    req_throttle(rate = 2L) |>
+    req_retry(max_tries = 5L)
+}
+
+base_req_search_nyt <- function(q, p, key) {
+  request("https://api.nytimes.com/") |>
+    req_url_path("svc/search/v2/articlesearch.json") |>
+    req_timeout(seconds = 60) |>
+    req_url_query(
+      q = q,
+      page = p,
+    ) |>
+    req_url_query(
+      "api-key" = key
+    ) |>
+    req_throttle(rate = 2L) |>
+    req_retry(max_tries = 5L)
+}
+
+
+# parse a single response
+parse_response <- function(resp) {
+  dat <- resp_body_json(resp)
+  res <- pluck(dat, "response", "results")
+  if (!is.null(res)) {
+    out <- map(res, parse_art_guardian) |>
+      bind_rows()
+    return(out)
+  }
+
+  res <- resp_body_json(resp) |>
+    pluck("response", "docs")
+
+  map(res, parse_art_guardian) |>
+    bind_rows()
+}
+
+# helper functin to parse a single article
+parse_art_guardian <- function(a) {
+  text <- pluck(a, "blocks", "body", 1, "bodyHtml") |>
+    rvest::read_html() |>
+    rvest::html_text2()
+
+  a$blocks <- NULL
+
+  as_tibble(a) |>
+    janitor::clean_names() |>
+    mutate(
+      web_publication_date = as_datetime(web_publication_date),
+      text = text
+    )
+}
+
+parse_art_nyt <- function(a) {
+  map(a, function(el) {
+    if (!is.list(el)) {
+      return(el)
+    }
+  }) |>
+    compact() |>
+    as_tibble() |>
+    mutate(headline = pluck(a, "headline", "main"))
+}
+
+# put string in quotes if there is whitespace in it
+in_quotes <- function(s) {
+  ifelse(str_detect(s, "\\s"), glue("\"{s}\""), s)
+}
+```
+
+
+# Main
+
+To search the APIs, we need API keys:
+
+```{r}
+keys_guardian <- read_delim("keys_guardian.txt", delim = ",", col_names = "key", col_types = "c") |> 
+  mutate(limit = FALSE)
+keys_nyt <- read_delim("keys_nyt.txt", delim = ",", col_names = "key", col_types = "c") |> 
+  mutate(limit = FALSE)
+```
+
+I construct the search query by combining words describing the LGBTQ+ community and its members with the names of the parties in UK and US politics:
+
+```{r}
+lgbtq_terms <- readLines("lgbtq-dict.txt") |> 
+  str_remove("#.*") |> 
+  str_trim() |> 
+  stringi::stri_remove_empty() |> 
+  in_quotes() |> 
+  paste(collapse = " OR ") 
+  
+lgbtq_terms |> 
+  cat()
+```
+
+```{r}
+parties <- readLines("party-dict.txt") |> 
+  str_remove("#.*") |> 
+  str_trim() |> 
+  stringi::stri_remove_empty() |> 
+  in_quotes() |> 
+  paste(collapse = " OR ")
+
+parties |> 
+  cat()
+```
+
+We search for any articles containing at least one word from the LGBTQ+ set and one word from the party set:
+
+```{r}
+query <- glue("({lgbtq_terms}) AND ({parties})")
+query |> 
+  cat()
+```
+
+Now I can collect the data
+
+```{r}
+resps_guardian <- search_guardian(q = query, initial_page = 1497, key = keys_guardian$key[2])
+saveRDS(resps_guardian, "resps_guardian.rds")
+resps_nyt <- search_nyt(q = query, key = keys_nyt$key[1])
+saveRDS(resps_guardian, "resps_nyt.rds")
+# fails <- resps_failures(resps_guardian)
+```
+
+I double-check if we really have all pages:
+
+```{r}
+pages <- resps_guardian |> 
+  pluck(1) |> 
+  resp_body_json() |> 
+  pluck("response", "pages")
+
+resps_guardian_rawdata <- resps_guardian |> 
+  resps_successes() |> 
+  resps_data(resp_body_json)
+
+test_guardian <- tibble(page = map_int(resps_guardian_rawdata, "currentPage"),
+       done = TRUE) |> 
+  right_join(tibble(page = seq_len(pages)), by = "page") 
+
+test_guardian |> 
+  count(done)
+```
+
+
+Now I can parse the responses into data.frames
+
+```{r}
+articles_guardian <- map(resps_guardian, parse_response) |> 
+  bind_rows()
+
+articles_nyt <- map(resps_nyt, parse_response) |> 
+  bind_rows()
+```
+
+# Wrap-up
+
+```{r}
+dir.create("data", showWarnings = FALSE)
+saveRDS(articles_guardian, "data/articles_guardian.rds")
+saveRDS(articles_nyt, "data/articles_nyt.rds")
+```
+
+Afterwards we get some information which is important to reproduce the report.
+
+```{r}
+sessionInfo()
+Sys.time()
+# note how long the script takes to (re-)run
+Sys.time() - start
+```

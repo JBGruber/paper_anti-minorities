@@ -1,0 +1,5 @@
+.Rhistory
+*.docx
+keys_*
+*.Rproj
+.Rproj.user/*
