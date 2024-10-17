@@ -8,6 +8,7 @@ format:
     toc_depth: 3
     toc_float: true
     number_sections: true
+    embed-resources: true
 ---
 
 # Introduction
@@ -23,6 +24,7 @@ I use httr2 to pull articles from the Guardian API.
 ```{r setup}
 #| include: false
 library(tidyverse)
+library(furrr)
 library(glue)
 library(httr2)
 start <- Sys.time() # note start time for later
@@ -35,59 +37,30 @@ I write a couple of functions which effectively pull data from the Guardian API
 ```{r}
 #| code-fold: true
 # function to perform a search
+# use an env to cache responses, if there is a need to interrupt the function
+cache_env <- new.env()
 search_guardian <- function(q, initial_page = 1L, max_pages = Inf, key) {
   # initial request
-  resp <- base_req_search_guardian(q, p = initial_page, key = key) |>
+  resp <- base_req_search_guardian(q, p = initial_page, key = key[1]) |>
     req_perform()
 
-    resps <- list(resp)
+  cache_env$resps <- list(cache_env$resps)
   info <- resp_body_json(resp) |>
     pluck("response")
 
-  message("Found ", info$total, "articles to download")
+  message("Found ", info$total, " articles to download")
 
   pgs <- seq_len(info$pages) |>
     tail(-initial_page) |>
     head(max_pages - 1L)
 
   req_list <- map(pgs, function(p) {
-    base_req_search_guardian(q, p = p, key = key)
+    base_req_search_guardian(q, p = p, key = sample(key, 1L))
   })
 
-  resps <- c(
-    resps,
-    # req_perform_parallel(req_list, on_error = "return")
-    req_perform_sequential(req_list, on_error = "return")
-  )
-
-  return(resps)
-}
-
-# in the first iteration, I still wanted data from the NYT as well, but the API does not deliver full text
-search_nyt <- function(q, initial_page = 1L, max_pages = Inf, key) {
-  # initial request
-  resp <- base_req_search_nyt(q, p = initial_page, key = key) |>
-    req_perform()
-
-  resps <- list(resp)
-  info <- resp_body_json(resp) |>
-    pluck("response", "meta")
-
-  message("Found ", info$hits, "articles to download")
-
-  pgs <- ceiling(info$hits / 10) |>
-    seq_len() |>
-    tail(-initial_page) |>
-    head(max_pages - 1L)
-
-  req_list <- map(pgs, function(p) {
-    base_req_search_nyt(q, p = p, key = key)
-  })
-
-  resps <- c(
-    resps,
-    # req_perform_parallel(req_list, on_error = "return")
-    req_perform_sequential(req_list, on_error = "return")
+  cache_env$resps <- c(
+    cache_env$resps,
+    req_perform_sequential(req_list, on_error = "return", progress = interactive())
   )
 
   return(resps)
@@ -103,21 +76,6 @@ base_req_search_guardian <- function(q, p, key) {
       q = q,
       page = p,
       "show-blocks" = "all"
-    ) |>
-    req_url_query(
-      "api-key" = key
-    ) |>
-    req_throttle(rate = 2L) |>
-    req_retry(max_tries = 5L)
-}
-
-base_req_search_nyt <- function(q, p, key) {
-  request("https://api.nytimes.com/") |>
-    req_url_path("svc/search/v2/articlesearch.json") |>
-    req_timeout(seconds = 60) |>
-    req_url_query(
-      q = q,
-      page = p,
     ) |>
     req_url_query(
       "api-key" = key
@@ -144,12 +102,27 @@ parse_response <- function(resp) {
     bind_rows()
 }
 
-# helper functin to parse a single article
+# helper function to parse a single article
 parse_art_guardian <- function(a) {
-  text <- pluck(a, "blocks", "body", 1, "bodyHtml") |>
-    rvest::read_html() |>
-    rvest::html_text2()
-
+  body <- pluck(a, "blocks", "body")
+  text <- map_chr(body, function(b) {
+    html <- pluck(b, "bodyHtml") |> 
+      trimws()
+    
+    # several reasons for why this fails, E.g., videos and other formats have empty body
+    text <- try({
+      html |>
+        rvest::read_html(options = "HUGE") |>
+        rvest::html_text2()
+    }, silent = TRUE)
+    
+    if (is(text, "try-error")) {
+      text <- ""
+    }
+    return(text)
+  }) |> 
+    paste0(collapse = "\n\n")
+  
   a$blocks <- NULL
 
   as_tibble(a) |>
@@ -158,17 +131,6 @@ parse_art_guardian <- function(a) {
       web_publication_date = as_datetime(web_publication_date),
       text = text
     )
-}
-
-parse_art_nyt <- function(a) {
-  map(a, function(el) {
-    if (!is.list(el)) {
-      return(el)
-    }
-  }) |>
-    compact() |>
-    as_tibble() |>
-    mutate(headline = pluck(a, "headline", "main"))
 }
 
 # put string in quotes if there is whitespace in it
@@ -185,8 +147,6 @@ To search the APIs, we need API keys:
 ```{r}
 keys_guardian <- read_delim("keys_guardian.txt", delim = ",", col_names = "key", col_types = "c") |> 
   mutate(limit = FALSE)
-keys_nyt <- read_delim("keys_nyt.txt", delim = ",", col_names = "key", col_types = "c") |> 
-  mutate(limit = FALSE)
 ```
 
 I construct the search query by combining words describing the LGBTQ+ community and its members with the names of the parties in UK and US politics:
@@ -198,9 +158,6 @@ lgbtq_terms <- readLines("lgbtq-dict.txt") |>
   stringi::stri_remove_empty() |> 
   in_quotes() |> 
   paste(collapse = " OR ") 
-  
-lgbtq_terms |> 
-  cat()
 ```
 
 ```{r}
@@ -210,9 +167,6 @@ parties <- readLines("party-dict.txt") |>
   stringi::stri_remove_empty() |> 
   in_quotes() |> 
   paste(collapse = " OR ")
-
-parties |> 
-  cat()
 ```
 
 We search for any articles containing at least one word from the LGBTQ+ set and one word from the party set:
@@ -226,11 +180,15 @@ query |>
 Now I can collect the data
 
 ```{r}
-resps_guardian <- search_guardian(q = query, initial_page = 1497, key = keys_guardian$key[2])
-saveRDS(resps_guardian, "resps_guardian.rds")
-resps_nyt <- search_nyt(q = query, key = keys_nyt$key[1])
-saveRDS(resps_guardian, "resps_nyt.rds")
-# fails <- resps_failures(resps_guardian)
+# since there is a rate limit on this, I cache the responses, in case I run the script again
+dir.create("data", showWarnings = FALSE)
+cache <- "data/resps_guardian.rds"
+if (!file.exists(cache)) {
+  resps_guardian <- search_guardian(q = query, initial_page = 1, key = pull(keys_guardian, key))
+  saveRDS(resps_guardian, cache)
+  # fails <- resps_failures(resps_guardian)
+}
+resps_guardian <- readRDS(cache)
 ```
 
 I double-check if we really have all pages:
@@ -246,30 +204,94 @@ resps_guardian_rawdata <- resps_guardian |>
   resps_data(resp_body_json)
 
 test_guardian <- tibble(page = map_int(resps_guardian_rawdata, "currentPage"),
-       done = TRUE) |> 
+                        done = TRUE) |> 
   right_join(tibble(page = seq_len(pages)), by = "page") 
 
 test_guardian |> 
   count(done)
 ```
 
-
-Now I can parse the responses into data.frames
+Now I can parse the responses into one data.frame:
 
 ```{r}
-articles_guardian <- map(resps_guardian, parse_response) |> 
-  bind_rows()
-
-articles_nyt <- map(resps_nyt, parse_response) |> 
+plan(multisession, workers = 6)
+articles_guardian <- resps_guardian |> 
+  future_map(parse_response, .progress = interactive()) |> 
   bind_rows()
 ```
+
+
+## Some quick insights
+
+How many articles do we have over time?
+
+```{r}
+#| label: fig-data-overview-full
+#| fig-cap: "Overall number of articles over time (full)"
+articles_guardian |> 
+  count(date = lubridate::floor_date(web_publication_date, "month")) |> 
+  ggplot(aes(x = date, y = n)) +
+  geom_line() +
+  labs(x = NULL, y = NULL) +
+  theme_minimal()
+```
+
+Looks like there are some digitised articles from long ago.
+But the Guardian online started publishing online in 1999.
+We can disregard the spotty archive before that.
+
+```{r}
+#| label: fig-data-overview
+#| fig-cap: "Overall number of articles over time"
+articles_guardian |> 
+  filter(web_publication_date > "1999-01-01") |> 
+  count(date = lubridate::floor_date(web_publication_date, "month")) |> 
+  ggplot(aes(x = date, y = n)) +
+  geom_line() +
+  labs(x = NULL, y = NULL) +
+  theme_minimal()
+```
+
+Excluding the articles before 1999, we have 
+
+```{r}
+articles_guardian_clean <- articles_guardian |> 
+  filter(web_publication_date > "1999-01-01") 
+
+total <- nrow(articles_guardian_clean)
+year_count <- articles_guardian_clean |> 
+  count(year = year(web_publication_date))
+
+year_max <- year_count |> 
+  slice_max(n, n = 1)
+
+year_min <- articles_guardian_clean |> 
+  count(year = year(web_publication_date)) |> 
+  slice_min(n, n = 1)
+
+year_min <- year_count |> 
+  slice_min(n, n = 1)
+
+year_avg <- year_count |> 
+  summarise(n = mean(n)) |> 
+  pull(n) |> 
+  as.integer()
+
+tribble(
+  ~"", ~Number,
+  "total", scales::comma(total),
+  "avg. per year", scales::comma(year_avg),
+  "year max. (2016)",  scales::comma(year_max$n),
+  "year min. (2016)",  scales::comma(year_min$n),
+  "time frame", glue("{min(year_count$year)} -- {max(year_count$year)}")
+)
+```
+
 
 # Wrap-up
 
 ```{r}
-dir.create("data", showWarnings = FALSE)
 saveRDS(articles_guardian, "data/articles_guardian.rds")
-saveRDS(articles_nyt, "data/articles_nyt.rds")
 ```
 
 Afterwards we get some information which is important to reproduce the report.

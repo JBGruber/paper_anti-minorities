@@ -3,3 +3,6 @@
 keys_*
 *.Rproj
 .Rproj.user/*
+.Rproj.user
+notes.txt
+data/
