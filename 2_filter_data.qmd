@@ -1,0 +1,127 @@
+---
+title: 2_filter_data
+author: Johannes B. Gruber
+date: today
+format:
+  html:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    embed-resources: true
+---
+
+# Introduction
+
+Our goal is to find out whether we can identify the weaponization of LGBTQ+ rights in party communication.
+For this, we download data from the Guardian API.
+We want articles that mention LGBTQ+ rights and a party or a politician affiliated with a party.
+
+## Packages
+
+I use httr2 to pull articles from the Guardian API.
+
+```{r setup}
+#| include: false
+library(tidyverse)
+library(tidytext)
+library(glue)
+library(httr2)
+start <- Sys.time() # note start time for later
+prototype <- FALSE
+```
+
+## Data
+
+```{r}
+articles_guardian <- readRDS("data/articles_guardian.rds") |> 
+  filter(web_publication_date > "1999-01-01")
+
+lgbtq_terms <- readLines("lgbtq-dict.txt") |> 
+  str_remove("#.*") |> 
+  str_trim() |> 
+  stringi::stri_remove_empty()
+
+parties <- readLines("party-dict.txt")
+
+parties_uk <- parties[1:str_which(parties, fixed("# US (since 1990)"))] |> 
+  str_remove("#.*") |> 
+  str_trim() |> 
+  stringi::stri_remove_empty()
+parties_us <- parties[str_which(parties, fixed("# US (since 1990)")):length(parties)] |> 
+  str_remove("#.*") |> 
+  str_trim() |> 
+  stringi::stri_remove_empty()
+
+dict <- tibble(
+  word = tolower(c(lgbtq_terms, parties_uk, parties_us)),
+  set = c(rep("lgbtq", length(lgbtq_terms)),
+          rep("parties_uk", length(parties_uk)),
+          rep("parties_us", length(parties_us)))
+) |> 
+  distinct(word, .keep_all = TRUE)
+dict
+
+if (prototype) {
+  articles_guardian <- articles_guardian |> 
+    sample_n(500)
+}
+```
+
+
+# Main
+
+I retain only paragraphs that feature both a keyword from the LGBTQ list and one from the party list.
+
+```{r}
+paragraphs <- articles_guardian |> 
+  unnest_paragraphs(output = text, input = text, to_lower = FALSE) |>
+  group_by(id) |> 
+  mutate(par_id = row_number(), .after = id) |> 
+  ungroup() |> 
+  unnest_tokens(output = word, input = text, to_lower = TRUE, drop = FALSE) |> 
+  inner_join(dict, by = "word") |> 
+  group_by(id, par_id) |> 
+  summarise(
+    text = head(text, 1),
+    word = list(word),
+    set = list(sort(unique(set))), 
+    .groups = "drop"
+  ) |> 
+  filter(map_lgl(set, \(x) "lgbtq" %in% x && any(x %in% c("parties_uk", "parties_us"))))
+```
+
+This retains:
+
+```{r}
+par_count <- paragraphs |> 
+  count(id)
+
+tribble(
+  ~"", ~Number,
+  "total", scales::comma(nrow(paragraphs)),
+  "avg. per article", scales::comma(mean(par_count$n), accuracy = 0.01),
+  "article max.",  scales::comma(max(par_count$n)),
+  "article min.",  scales::comma(min(par_count$n)),
+  "no hit", scales::comma(sum(!articles_guardian$id %in% paragraphs$id)),
+  "no hit pct", scales::percent(sum(!articles_guardian$id %in% paragraphs$id) / nrow(articles_guardian))
+)
+```
+
+
+
+# Wrap-up
+
+```{r}
+saveRDS(paragraphs, "data/lgbtq_party_paragraphs.rds")
+```
+
+
+Afterwards we get some information which is important to reproduce the report.
+
+```{r}
+sessionInfo()
+Sys.time()
+# note how long the script takes to (re-)run
+Sys.time() - start
+```
