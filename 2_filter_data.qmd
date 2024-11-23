@@ -130,12 +130,9 @@ freq_plot <- bind_rows(art_counts, par_counts) |>
                                 "paragraphs" = "#970014")) +
   scale_x_datetime(date_breaks = "3 years", date_labels = "%Y") +
   theme(legend.position = "inside", legend.position.inside = c(0.1, 0.9))
-ggsave("fig1.png", freq_plot, width = 16, height = 11, units = "cm")
+ggsave("figures/fig1.png", freq_plot, width = 16, height = 11, units = "cm")
 freq_plot
 ```
-
-
-
 
 # Wrap-up
 

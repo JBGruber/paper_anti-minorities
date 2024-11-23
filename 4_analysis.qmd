@@ -1,0 +1,409 @@
+---
+title: 4_analysis
+author: Johannes B. Gruber
+date: today
+format:
+  html:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    embed-resources: true
+---
+
+# Introduction
+
+
+## Packages
+
+```{r setup}
+#| include: false
+library(tidyverse)
+library(jsonlite)
+library(patchwork)
+start <- Sys.time() # note start time for later
+prototype <- TRUE
+```
+
+## Data
+
+```{r}
+articles_guardian <- readRDS("data/articles_guardian.rds") |> 
+  filter(web_publication_date > "1999-01-01",
+         !duplicated(id))
+paragraphs_annotated <- readRDS("data/lgbtq_party_paragraphs_annotated.rds")
+# I cleaned up the party names by hand to make them easier to plot
+paragraphs_annotated_party <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/13qfw2IR_ovqN7SH9FR9eP-ZAJZpEYMhSAw5396Wzkr8/edit?usp=sharing") |> 
+  select(id, par_id, `5_party`, `5_party_clean`)
+```
+
+
+# Main
+
+Some data wrangling and joining to get a nice clean analysis dataset.
+
+```{r}
+paragraphs_annotated_tidy <- paragraphs_annotated |> 
+  rowwise() |> 
+  mutate(annotation = str_extract(annotation, "\\{.+?\\}"),
+         annotation = list(fromJSON(annotation))) |> 
+  unnest_wider(annotation) |> 
+  left_join(articles_guardian |> select(id, web_publication_date),
+            by = "id") |> 
+  left_join(paragraphs_annotated_party, by = c("id", "par_id", "5_party")) |> 
+  # clean up variable
+  mutate(evaluation_lgbtq_clean = `2_evaluation_lgbtq`,
+         evaluation_lgbtq_clean = str_remove(evaluation_lgbtq_clean, " \\(.*"),
+         evaluation_lgbtq_clean = ifelse(evaluation_lgbtq_clean != "NA", evaluation_lgbtq_clean, "not mentioned"),
+         evaluation_lgbtq_clean = ifelse(`1_lgbtq` == "Yes", evaluation_lgbtq_clean, "not mentioned"),
+         evaluation_lgbtq_clean = ifelse(evaluation_lgbtq_clean != "concerned/neutral", evaluation_lgbtq_clean, "positive"),
+         evaluation_lgbtq_clean = fct_relevel(evaluation_lgbtq_clean, "not mentioned", "positive", "neutral", "negative")) |> 
+  mutate(evaluation_minority_clean = `4_evaluation_minority`,
+         evaluation_minority_clean = str_remove(evaluation_minority_clean, " \\(.*"),
+         evaluation_minority_clean = ifelse(evaluation_minority_clean != "NA", evaluation_minority_clean, "not mentioned"),
+         evaluation_minority_clean = ifelse(`1_lgbtq` == "Yes", evaluation_minority_clean, "not mentioned"),
+         evaluation_minority_clean = fct_relevel(evaluation_minority_clean, "not mentioned", "positive", "neutral", "negative"))
+```
+
+## Party plots
+
+And some more wrangling for the party plots. Since there are a lot of parties, I collapse everything but the most frquent ones into "others". I also collapse Reform UK and UKIP into one.
+
+```{r}
+top_parties <- paragraphs_annotated_tidy |> 
+  separate_longer_delim(`5_party_clean`, ", ") |> 
+  count(`5_party_clean`, sort = TRUE)
+
+paragraphs_annotated_tidy_clean <- paragraphs_annotated_tidy |> 
+  separate_longer_delim(`5_party_clean`, ", ") |> 
+  mutate(party_clean = recode_factor(
+    `5_party_clean`,
+    "Labour"            = "Labour"           ,
+    "Republicans"       = "Republicans"      ,
+    "Democrats"         = "Democrats"        ,
+    "Conservatives"     = "Conservatives"    ,
+    "Green Party"       = "Green Party"      ,
+    "DUP"               = "DUP"              ,
+    "Liberal Democrats" = "Liberal Democrats",
+    "Labor"             = "Labor"            ,
+    "SNP"               = "SNP"              ,
+    "Liberals"          = "Liberals"         ,
+    "UKIP/Reform"       = "UKIP"             ,
+    "Liberal Party"     = "Liberal Party"    ,
+    "Fine Gael"         = "Fine Gael"        ,
+    "UKIP/Reform"       = "Reform UK"        ,
+    .default = "other",
+    .missing = "No mention"
+  ), 
+  party_clean = fct_rev(fct_infreq(party_clean)))
+```
+
+First plot to show how often parties evaluate LGBTQ+ issues or rights as positive/neutral/negative:
+
+```{r}
+fig2_lgbtq_sentiment <- paragraphs_annotated_tidy_clean |> 
+  count(party_clean, evaluation_lgbtq_clean, sort = TRUE) |> 
+  ggplot(aes(x = n, y = party_clean, fill = evaluation_lgbtq_clean)) +
+  geom_col() +
+  scale_fill_manual(values = c(
+    "negative" = "#fc4e51",
+    "neutral" = "#ffb347",
+    "positive" = "#77c97d",
+    "not mentioned" = "#d3d3d3"
+  )) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_minimal() +
+  theme(legend.position = "inside", legend.position.inside = c(0.8, 0.2))
+ggsave("figures/fig2.png", fig2_lgbtq_sentiment, width = 16, height = 11, units = "cm")
+fig2_lgbtq_sentiment
+```
+
+And the same with immigrants and ethnic minority issues/rights:
+
+```{r}
+fig3_minority_sentiment <- paragraphs_annotated_tidy_clean |> 
+  count(party_clean, evaluation_minority_clean, sort = TRUE) |> 
+  ggplot(aes(x = n, y = party_clean, fill = evaluation_minority_clean)) +
+  geom_col() +
+  scale_fill_manual(values = c(
+    "negative" = "#fc4e51",
+    "neutral" = "#ffb347",
+    "positive" = "#77c97d",
+    "not mentioned" = "#d3d3d3"
+  )) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_minimal() +
+  theme(legend.position = "inside", legend.position.inside = c(0.8, 0.2))
+ggsave("figures/fig3.png", fig3_minority_sentiment, width = 16, height = 11, units = "cm")
+fig3_minority_sentiment
+```
+
+Since they are so similar, we can collapse them into one plot:
+
+```{r}
+fig2_alt <- fig2_lgbtq_sentiment + fig3_minority_sentiment + plot_layout(axes = "collect")
+ggsave("figures/fig2_alt.png", fig2_alt, width = 16, height = 11, units = "cm")
+fig2_alt
+```
+
+And to look a bit closer I want to know how often parties see LGBTQ+ as positive and minorities as negative and so on:
+
+```{r}
+colfunc <- colorRampPalette(c("#5a5a5a", "#C6C6C6"))
+greys <- colfunc(10)
+colfunc <- colorRampPalette(c("#77c97d", "#fc4e51"))
+cols <- colfunc(4)
+
+fig4_evaluation_combined <- paragraphs_annotated_tidy_clean |>
+  count(
+    party_clean, evaluation_lgbtq_clean,
+    evaluation_minority_clean
+  ) |>
+  unite(
+    col = "Evaluation",
+    evaluation_lgbtq_clean, evaluation_minority_clean, sep = "/"
+  ) |>
+  mutate(Evaluation = factor(Evaluation, levels = rev(c(
+    # highlight
+    "positive/positive",
+    "positive/negative",
+    "negative/positive",
+    "negative/negative",
+    # not highlight
+    "positive/neutral",
+    "neutral/positive",
+    "neutral/neutral",
+    "negative/neutral",
+    "neutral/negative",
+    "positive/not mentioned",
+    "neutral/not mentioned",
+    "negative/not mentioned",
+    "not mentioned/negative",
+    "not mentioned/not mentioned"
+  )))) |>
+  ggplot(aes(x = n, y = party_clean, fill = Evaluation)) +
+  geom_col() +
+  scale_fill_manual(values = c(
+    # highlight
+    "positive/positive" = "#77c97d",
+    "positive/negative" = "#ffbf47",
+    "negative/positive" = "#ffe347",
+    "negative/negative" = "#fc4e51",
+    # not highlight
+    "positive/neutral" = greys[1],
+    "neutral/positive" = greys[2],
+    "neutral/neutral" = greys[3],
+    "negative/neutral" = greys[4],
+    "neutral/negative" = greys[5],
+    "positive/not mentioned" = greys[6],
+    "neutral/not mentioned" = greys[7],
+    "negative/not mentioned" = greys[8],
+    "not mentioned/negative" = greys[9],
+    "not mentioned/not mentioned" = greys[10]
+  )) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_minimal()
+ggsave("figures/fig4.png", fig4_evaluation_combined, width = 16, height = 11, units = "cm")
+fig4_evaluation_combined
+```
+
+```{r}
+fig4_alt_evaluation_combined <- paragraphs_annotated_tidy_clean |>
+  group_by(
+    party_clean, evaluation_lgbtq_clean, evaluation_minority_clean
+  ) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(party_clean) |> 
+  mutate(freq = n / sum(n)) |>
+  unite(
+    col = "Evaluation",
+    evaluation_lgbtq_clean, evaluation_minority_clean, sep = "/"
+  ) |>
+  mutate(Evaluation = factor(Evaluation, levels = rev(c(
+    # highlight
+    "positive/positive",
+    "positive/negative",
+    "negative/positive",
+    "negative/negative",
+    # not highlight
+    "positive/neutral",
+    "neutral/positive",
+    "neutral/neutral",
+    "negative/neutral",
+    "neutral/negative",
+    "positive/not mentioned",
+    "neutral/not mentioned",
+    "negative/not mentioned",
+    "not mentioned/negative",
+    "not mentioned/not mentioned"
+  )))) |>
+  ggplot(aes(x = freq, y = party_clean, fill = Evaluation)) +
+  geom_col() +
+  scale_fill_manual(values = c(
+    # highlight
+    "positive/positive" = "#77c97d",
+    "positive/negative" = "#ffbf47",
+    "negative/positive" = "#ffe347",
+    "negative/negative" = "#fc4e51",
+    # not highlight
+    "positive/neutral" = greys[1],
+    "neutral/positive" = greys[2],
+    "neutral/neutral" = greys[3],
+    "negative/neutral" = greys[4],
+    "neutral/negative" = greys[5],
+    "positive/not mentioned" = greys[6],
+    "neutral/not mentioned" = greys[7],
+    "negative/not mentioned" = greys[8],
+    "not mentioned/negative" = greys[9],
+    "not mentioned/not mentioned" = greys[10]
+  )) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_minimal()
+ggsave("figures/fig4_alt.png", fig4_alt_evaluation_combined, width = 16, height = 11, units = "cm")
+fig4_alt_evaluation_combined
+```
+
+## Time plots
+
+Statment frequency over time
+
+```{r}
+fig5_evaluation_over_time <- paragraphs_annotated_tidy_clean |> 
+  count(date = lubridate::floor_date(web_publication_date, "year"), evaluation_lgbtq_clean, evaluation_minority_clean) |>
+  unite(col = "Evaluation", evaluation_lgbtq_clean, evaluation_minority_clean, sep = "/") |> 
+  mutate(Evaluation = factor(Evaluation, levels = rev(c(
+    # highlight
+    "positive/positive",
+    "positive/negative",
+    "negative/positive",
+    "negative/negative",
+    # not highlight
+    "positive/neutral",
+    "neutral/positive",
+    "neutral/neutral",
+    "negative/neutral",
+    "neutral/negative",
+    "positive/not mentioned",
+    "neutral/not mentioned",
+    "negative/not mentioned",
+    "not mentioned/negative",
+    "not mentioned/not mentioned"
+  )))) |> 
+  ggplot(aes(x = date, y = n, colour = Evaluation)) +
+  geom_line() + 
+  scale_colour_manual(values = c(
+    # highlight
+    "positive/positive" = "#77c97d",
+    "positive/negative" = "#ffbf47",
+    "negative/positive" = "#ffe347",
+    "negative/negative" = "#fc4e51",
+    # not highlight
+    "positive/neutral" = greys[1],
+    "neutral/positive" = greys[2],
+    "neutral/neutral" = greys[3],
+    "negative/neutral" = greys[4],
+    "neutral/negative" = greys[5],
+    "positive/not mentioned" = greys[6],
+    "neutral/not mentioned" = greys[7],
+    "negative/not mentioned" = greys[8],
+    "not mentioned/negative" = greys[9],
+    "not mentioned/not mentioned" = greys[10]
+  )) +
+  labs(x = NULL, y = NULL, fill = NULL, colour = NULL) +
+  theme_minimal()
+ggsave("figures/fig5.png", fig5_evaluation_over_time, width = 16, height = 11, units = "cm")
+fig5_evaluation_over_time
+```
+
+Alternative 1: remove neutral and not mentioend:
+
+```{r}
+fig5_evaluation_over_time_alt <- paragraphs_annotated_tidy_clean |>
+  count(date = lubridate::floor_date(web_publication_date, "year"), evaluation_lgbtq_clean, evaluation_minority_clean) |>
+  filter(
+    evaluation_lgbtq_clean != "not mentioned",
+    evaluation_lgbtq_clean != "neutral",
+    evaluation_minority_clean != "not mentioned",
+    evaluation_minority_clean != "neutral",
+  ) |>
+  unite(col = "Evaluation", evaluation_lgbtq_clean, evaluation_minority_clean, sep = "/") |>
+  ggplot(aes(x = date, y = n, colour = Evaluation)) +
+  geom_line() +
+  scale_colour_manual(values = c(
+    # highlight
+    "positive/positive" = "#77c97d",
+    "positive/negative" = "#ffbf47",
+    "negative/positive" = "#ffe347",
+    "negative/negative" = "#fc4e51"
+  )) +
+  labs(x = NULL, y = NULL, fill = NULL, colour = NULL) +
+  theme_minimal()
+ggsave("figures/fig5_alt.png", fig5_evaluation_over_time_alt, width = 16, height = 11, units = "cm")
+fig5_evaluation_over_time_alt
+```
+
+Alternative 2: make barplot instead
+
+```{r}
+fig5_evaluation_over_time_alt2 <- paragraphs_annotated_tidy_clean |>
+  count(date = lubridate::floor_date(web_publication_date, "year"), evaluation_lgbtq_clean, evaluation_minority_clean) |>
+  filter(
+    evaluation_lgbtq_clean != "not mentioned",
+    evaluation_lgbtq_clean != "neutral",
+    evaluation_minority_clean != "not mentioned",
+    evaluation_minority_clean != "neutral",
+  ) |>
+  unite(col = "Evaluation", evaluation_lgbtq_clean, evaluation_minority_clean, sep = "/") |>
+  ggplot(aes(x = date, y = n, fill = Evaluation)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c(
+    # highlight
+    "positive/positive" = "#77c97d",
+    "positive/negative" = "#ffbf47",
+    "negative/positive" = "#ffe347",
+    "negative/negative" = "#fc4e51"
+  )) +
+  labs(x = NULL, y = NULL, fill = NULL, colour = NULL) +
+  theme_minimal()
+ggsave("figures/fig5_alt2.png", fig5_evaluation_over_time_alt2, width = 16, height = 11, units = "cm")
+fig5_evaluation_over_time_alt2
+```
+
+Alternative 3: instead of yearly frequencies, show smoothed trend:
+
+```{r}
+fig5_evaluation_over_time_alt3 <- paragraphs_annotated_tidy_clean |>
+  filter(web_publication_date < "2024-01-01") |> 
+  count(date = lubridate::floor_date(web_publication_date, "year"), evaluation_lgbtq_clean, evaluation_minority_clean) |>
+  filter(
+    evaluation_lgbtq_clean != "not mentioned",
+    evaluation_lgbtq_clean != "neutral",
+    evaluation_minority_clean != "not mentioned",
+    evaluation_minority_clean != "neutral",
+  ) |>
+  unite(col = "Evaluation", evaluation_lgbtq_clean, evaluation_minority_clean, sep = "/") |>
+  ggplot(aes(x = date, y = n, colour = Evaluation)) +
+  # geom_line() +
+  geom_smooth(method = "loess", formula = "y ~ x", se = FALSE) +
+  scale_colour_manual(values = c(
+    # highlight
+    "positive/positive" = "#77c97d",
+    "positive/negative" = "#ffbf47",
+    "negative/positive" = "#ffe347",
+    "negative/negative" = "#fc4e51"
+  )) +
+  labs(x = NULL, y = NULL, fill = NULL, colour = NULL) +
+  theme_minimal()
+ggsave("figures/fig5_alt.png", fig5_evaluation_over_time_alt3, width = 16, height = 11, units = "cm")
+fig5_evaluation_over_time_alt3
+```
+
+# Wrap-up
+
+```{r}
+sessionInfo()
+Sys.time()
+# note how long the script takes to (re-)run
+Sys.time() - start
+```
+
