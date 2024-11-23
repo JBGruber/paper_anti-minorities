@@ -1,0 +1,155 @@
+---
+title: 3_annotation
+author: Johannes B. Gruber
+date: today
+format:
+  html:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    embed-resources: true
+---
+
+# Introduction
+
+- who is talking about LGBTQ?
+- Is the statement referring to LGBTQ+ rights
+- Is the statement using LGBTQ+ rights to draw boundaries between in-groups (natives) and out-groups (immigrants)?
+- If so, who is the excluded group
+
+prompt:
+
+Analyze the following paragraph and answer these questions about it:
+
+1. Is the statement referring to LGBTQ+ rights or issues?
+
+If the answer is "no", answer the remaining questions with NA (not applicable).
+
+2. Which political party, or member thereof, is making the statement?
+
+If no party is explicitly mentioned, return NA.
+
+3. Is the statement predominantely positive, neutral, or negative about LGBTQ+ rights or issues? (Choose one)
+4. Is the statement using LGBTQ+ rights or issues to draw boundaries between in-groups (e.g., natives) and out-groups (e.g., immigrants)?
+
+If the answer is "no", answer the remaining question with NA.
+
+5. Which out-groups is the text mentioning?
+
+Only give factual answers to the question. If there is no correct answer based on the text, return NA. Do not make things up.
+
+Return answers in the following format:
+{"1": "<Yes/No>", "2": "<Party Name or NA>", "3": "<positive/neutral/negative or NA>", "4": "<Yes/No>", "5": "<Out-group or NA>"}
+
+
+{"1": "Yes", "2": "Labour", "3": "positive", "4": "No", "5": "NA"}
+{"1": "Yes", "2": "Conservatives", "3": "positive", "4": "Yes", "5": "Immigrants"}
+{"1": "No", "2": "NA", "3": "NA", "4": "NA", "5": "NA"}
+
+
+{"1": "Yes", "2": "Labour", "3": "positive", "4": "No", "5": "NA"}
+"As a society, we have made significant progress on LGBTQ+ rights, ensuring that every individual, regardless of their gender or sexuality, is treated equally under the law. Labour is committed to continuing this work for a more inclusive future."
+
+{"1": "Yes", "2": "Conservatives", "3": "positive", "4": "Yes", "5": "Immigrants"}
+"The Conservative Party stands firmly in support of LGBTQ+ rights. However, we must acknowledge that certain immigrant groups hold values that conflict with our commitment to equality, and we need to address these differences to protect our nation's liberal principles."
+
+{"1": "No", "2": "NA", "3": "NA", "4": "NA", "5": "NA"}
+"The Green Party is focused on addressing transgender rights, climate change and economic inequality."
+
+
+## Packages
+
+I use httr2 to pull articles from the Guardian API.
+
+```{r setup}
+#| include: false
+library(tidyverse)
+library(rollama)
+start <- Sys.time() # note start time for later
+prototype <- FALSE
+```
+
+## Data
+
+```{r}
+paragraphs <- readRDS("data/lgbtq_party_paragraphs.rds") |> 
+  filter(nchar(text) < 1000)
+if (prototype) {
+  set.seed(1)
+  paragraphs <- paragraphs |> 
+    sample_n(20)
+}
+```
+
+
+# Main
+
+I retain only paragraphs that feature both a keyword from the LGBTQ list and one from the party list.
+
+TODO:
+
+- ask category specifically
+- ask 4 (and 5) seperately
+- only check homonationalism
+
+```{r}
+prompt <- "Analyze the following paragraph. Is this positive about LGBTQ rights, but negative about another minority? Think before you speak, but answer either {Yes} or {No} in the end (choose one)."
+
+
+make_query <- function(txt) {
+  map(txt, function(t) {
+    tribble(
+      ~role, ~content,
+      "system", prompt,
+      "user", "As a society, we have made significant progress on LGBTQ+ rights, ensuring that every individual, regardless of their gender or sexuality, is treated equally under the law. Labour is committed to continuing this work for a more inclusive future.",
+      "assistant", "This paragraph is positive about LGBTQ+ rights, but does not speak negativly about another minority.\n\n{No}",
+      "user", "The Conservative Party stands firmly in support of LGBTQ+ rights. However, we must acknowledge that certain immigrant groups hold values that conflict with our commitment to equality, and we need to address these differences to protect our nation's liberal principles.",
+      "assistant",  "This paragraph is positive about LGBTQ+ rights, but uses these rights to attack immigrants.\n\n{Yes}",
+      "user", t
+    )
+  })
+}
+```
+
+This retains:
+
+```{r}
+paragraphs_annotated <- paragraphs |> 
+  mutate(
+    query = make_query(txt = text),
+    annotation = query(query, screen = FALSE,
+                       model = "llama3.1:8b-instruct-q8_0", 
+                       server = "http://192.168.2.29:11434/", 
+                       output = "text",
+                       model_params = list(seed = 42, temperature = 0))
+  )
+```
+
+```{r}
+#| eval: false
+#| echo: false
+paragraphs_annotated_tidy <- paragraphs_annotated |> 
+  rowwise() |> 
+  mutate(annotation2 = str_extract(annotation, "\\{.+?\\}"))
+
+paragraphs_annotated_tidy |> 
+  select(-id, -par_id, -word, -set, -query) |> 
+  View("annotated")
+```
+
+
+# Wrap-up
+
+```{r}
+saveRDS(paragraphs_annotated, "data/lgbtq_party_paragraphs_annotated.rds")
+```
+
+Afterwards we get some information which is important to reproduce the report.
+
+```{r}
+sessionInfo()
+Sys.time()
+# note how long the script takes to (re-)run
+Sys.time() - start
+```
