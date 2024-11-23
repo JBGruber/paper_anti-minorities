@@ -35,7 +35,8 @@ prototype <- FALSE
 
 ```{r}
 articles_guardian <- readRDS("data/articles_guardian.rds") |> 
-  filter(web_publication_date > "1999-01-01")
+  filter(web_publication_date > "1999-01-01",
+         !duplicated(id))
 
 lgbtq_terms <- readLines("lgbtq-dict.txt") |> 
   str_remove("#.*") |> 
@@ -54,7 +55,7 @@ parties_us <- parties[str_which(parties, fixed("# US (since 1990)")):length(part
   stringi::stri_remove_empty()
 
 dict <- tibble(
-  word = tolower(c(lgbtq_terms, parties_uk, parties_us)),
+  word = c(lgbtq_terms, parties_uk, parties_us),
   set = c(rep("lgbtq", length(lgbtq_terms)),
           rep("parties_uk", length(parties_uk)),
           rep("parties_us", length(parties_us)))
@@ -63,6 +64,7 @@ dict <- tibble(
 dict
 
 if (prototype) {
+  set.seed(1)
   articles_guardian <- articles_guardian |> 
     sample_n(500)
 }
@@ -79,7 +81,7 @@ paragraphs <- articles_guardian |>
   group_by(id) |> 
   mutate(par_id = row_number(), .after = id) |> 
   ungroup() |> 
-  unnest_tokens(output = word, input = text, to_lower = TRUE, drop = FALSE) |> 
+  unnest_tokens(output = word, input = text, to_lower = FALSE, drop = FALSE) |> 
   inner_join(dict, by = "word") |> 
   group_by(id, par_id) |> 
   summarise(
@@ -107,6 +109,31 @@ tribble(
   "no hit pct", scales::percent(sum(!articles_guardian$id %in% paragraphs$id) / nrow(articles_guardian))
 )
 ```
+
+```{r}
+art_counts <- articles_guardian |> 
+  filter(web_publication_date > "1999-01-01") |> 
+  count(date = lubridate::floor_date(web_publication_date, "month")) |> 
+  mutate(what = "articles")
+
+par_counts <- paragraphs |> 
+  left_join(articles_guardian, by = "id") |> 
+  count(date = lubridate::floor_date(web_publication_date, "month")) |> 
+  mutate(what = "paragraphs")
+
+freq_plot <- bind_rows(art_counts, par_counts) |> 
+  ggplot(aes(x = date, y = n, colour = what)) +
+  geom_line() +
+  labs(x = NULL, y = NULL, colour = NULL) +
+  theme_minimal() +
+  scale_color_manual(values = c("articles" = "#2D2926", 
+                                "paragraphs" = "#970014")) +
+  scale_x_datetime(date_breaks = "3 years", date_labels = "%Y") +
+  theme(legend.position = "inside", legend.position.inside = c(0.1, 0.9))
+ggsave("fig1.png", freq_plot, width = 16, height = 11, units = "cm")
+freq_plot
+```
+
 
 
 
