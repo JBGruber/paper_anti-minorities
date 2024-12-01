@@ -20,6 +20,7 @@ format:
 #| include: false
 library(tidyverse)
 library(jsonlite)
+library(gtsummary)
 library(patchwork)
 start <- Sys.time() # note start time for later
 prototype <- TRUE
@@ -33,7 +34,9 @@ articles_guardian <- readRDS("data/articles_guardian.rds") |>
          !duplicated(id))
 paragraphs_annotated <- readRDS("data/lgbtq_party_paragraphs_annotated.rds")
 # I cleaned up the party names by hand to make them easier to plot
-paragraphs_annotated_party <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/13qfw2IR_ovqN7SH9FR9eP-ZAJZpEYMhSAw5396Wzkr8/edit?usp=sharing") |> 
+googlesheets4::gs4_deauth()
+paragraphs_annotated_party <-
+googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/13qfw2IR_ovqN7SH9FR9eP-ZAJZpEYMhSAw5396Wzkr8/edit?usp=sharing") |> 
   select(id, par_id, `5_party`, `5_party_clean`)
 ```
 
@@ -65,6 +68,15 @@ paragraphs_annotated_tidy <- paragraphs_annotated |>
          evaluation_minority_clean = fct_relevel(evaluation_minority_clean, "not mentioned", "positive", "neutral", "negative"))
 ```
 
+Some descriptives
+
+```{r}
+paragraphs_annotated_tidy |> 
+  select(evaluation_lgbtq_clean, evaluation_minority_clean) |> 
+  tbl_summary()
+```
+
+
 ## Party plots
 
 And some more wrangling for the party plots. Since there are a lot of parties, I collapse everything but the most frquent ones into "others". I also collapse Reform UK and UKIP into one.
@@ -78,24 +90,21 @@ paragraphs_annotated_tidy_clean <- paragraphs_annotated_tidy |>
   separate_longer_delim(`5_party_clean`, ", ") |> 
   mutate(party_clean = recode_factor(
     `5_party_clean`,
-    "Labour"            = "Labour"           ,
-    "Republicans"       = "Republicans"      ,
-    "Democrats"         = "Democrats"        ,
-    "Conservatives"     = "Conservatives"    ,
-    "Green Party"       = "Green Party"      ,
-    "DUP"               = "DUP"              ,
-    "Liberal Democrats" = "Liberal Democrats",
-    "Labor"             = "Labor"            ,
-    "SNP"               = "SNP"              ,
-    "Liberals"          = "Liberals"         ,
-    "UKIP/Reform"       = "UKIP"             ,
-    "Liberal Party"     = "Liberal Party"    ,
-    "Fine Gael"         = "Fine Gael"        ,
-    "UKIP/Reform"       = "Reform UK"        ,
+    "Labour"                = "Labour"           ,
+    "Republicans"           = "Republicans"      ,
+    "Democrats"             = "Democrats"        ,
+    "Conservatives"         = "Conservatives"    ,
+    "Green Party"           = "Green Party"      ,
+    "DUP"                   = "DUP"              ,
+    "Liberal Democrats"     = "Liberal Democrats",
+    "SNP"                   = "SNP"              ,
+    "UKIP/Reform"           = "UKIP"             ,
+    "UKIP/Reform"           = "Reform UK"        ,
     .default = "other",
     .missing = "No mention"
   ), 
-  party_clean = fct_rev(fct_infreq(party_clean)))
+  party_clean = fct_rev(fct_infreq(party_clean))) |> 
+  filter(party_clean != "other")
 ```
 
 First plot to show how often parties evaluate LGBTQ+ issues or rights as positive/neutral/negative:
@@ -261,6 +270,73 @@ fig4_alt_evaluation_combined <- paragraphs_annotated_tidy_clean |>
   theme_minimal()
 ggsave("figures/fig4_alt.png", fig4_alt_evaluation_combined, width = 16, height = 11, units = "cm")
 fig4_alt_evaluation_combined
+```
+
+
+```{r}
+fig4_alt_evaluation_combined_simple <- paragraphs_annotated_tidy_clean |>
+  group_by(
+    party_clean, evaluation_lgbtq_clean, evaluation_minority_clean
+  ) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(party_clean) |> 
+  mutate(freq = n / sum(n)) |>
+  unite(
+    col = "Evaluation",
+    evaluation_lgbtq_clean, evaluation_minority_clean, sep = "/"
+  ) |>
+  mutate(Evaluation = factor(Evaluation, levels = rev(c(
+    # highlight
+    "positive/positive",
+    "positive/negative",
+    "negative/positive",
+    "negative/negative",
+    # not highlight
+    "positive/neutral",
+    "neutral/positive",
+    "neutral/neutral",
+    "negative/neutral",
+    "neutral/negative",
+    "positive/not mentioned",
+    "neutral/not mentioned",
+    "negative/not mentioned",
+    "not mentioned/negative",
+    "not mentioned/not mentioned"
+  )))) |>
+  mutate(Evaluation = fct_collapse(
+    Evaluation, 
+    other = c("positive/neutral",
+    "neutral/positive",
+    "neutral/neutral",
+    "negative/neutral",
+    "neutral/negative",
+    "positive/not mentioned",
+    "neutral/not mentioned",
+    "negative/not mentioned",
+    "not mentioned/negative",
+    "not mentioned/not mentioned"
+    )
+  )) |> 
+  group_by(party_clean, Evaluation) |> 
+  summarise(n = sum(n), freq = sum(freq), .groups = "drop") |> 
+  ggplot(aes(x = freq, y = party_clean, fill = Evaluation, label = n)) +
+  geom_col(alpha = 0.8) +
+  # geom_text(position = position_stack(vjust = 0.5)) + 
+  scale_fill_manual(values = c(
+    # highlight
+    "positive/positive" = "#77c97d",
+    "positive/negative" = "#ffbf47",
+    "negative/positive" = "#ffe347",
+    "negative/negative" = "#fc4e51",
+    # not highlight
+    "other" = greys[10]
+  )) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  scale_x_continuous(labels = scales::percent) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+ggsave("figures/fig4_alt2.png", fig4_alt_evaluation_combined_simple, width = 16, height = 11, units = "cm")
+fig4_alt_evaluation_combined_simple
 ```
 
 ## Time plots
