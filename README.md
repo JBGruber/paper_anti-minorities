@@ -2,7 +2,7 @@
 
 # Weaponizing rights: Political Uses of LGBTQ+ Rhetoric in Media Outlets
 
-Authors: *Alberto López Ortega, Johannes Gruber, Mariken A.C.G. van der Velden*
+Authors: *Johannes B. Gruber, Alberto López Ortega Mariken A.C.G. van der Velden[^1]*
 
 This is the code to reproduce the numbers, figures and analyses for the chapter *Weaponizing rights: Political Uses of LGBTQ+ Rhetoric in Media Outlets*. Preprint: <https://doi.org/10.31219/osf.io/dyuwa>
 
@@ -26,3 +26,5 @@ for (file in list.files(pattern = ".qmd")) {
 ```
 
 If something does not work, look at the end of the rendered versions of the notebooks (.html files) for the specific versions of the packages utilized here.
+
+[^1]: The order of authorship for this chapter reflects equal contributions from all authors. The names are listed alphabetically to emphasize this shared effort.
