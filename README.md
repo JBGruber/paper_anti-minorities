@@ -1,8 +1,10 @@
+[![DOI](https://img.shields.io/badge/DOI-10.31219%2Fosf.io%2Fdyuwa-38bbf1?logo=osf&logoColor=38bbf1)](https://doi.org/10.31219/osf.io/dyuwa)
+
 # Weaponizing rights: Political Uses of LGBTQ+ Rhetoric in Media Outlets
 
 Authors: *Alberto López Ortega, Johannes Gruber, Mariken A.C.G. van der Velden*
 
-This is the code to reproduce the numbers, figures and analyses for the chapter *Weaponizing rights: Political Uses of LGBTQ+ Rhetoric in Media Outlets*.
+This is the code to reproduce the numbers, figures and analyses for the chapter *Weaponizing rights: Political Uses of LGBTQ+ Rhetoric in Media Outlets*. Preprint: <https://doi.org/10.31219/osf.io/dyuwa>
 
 The main analysis is done with [`rollama`](https://jbgruber.github.io/rollama/index.html), which requires the software [Ollama](https://ollama.com/) to run the utiliyed model.
 
