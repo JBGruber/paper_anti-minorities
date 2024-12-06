@@ -6,7 +6,7 @@ Authors: *Johannes B. Gruber, Alberto López Ortega Mariken A.C.G. van der Velde
 
 This is the code to reproduce the numbers, figures and analyses for the chapter *Weaponizing rights: Political Uses of LGBTQ+ Rhetoric in Media Outlets*. Preprint: <https://doi.org/10.31219/osf.io/dyuwa>
 
-The main analysis is done with [`rollama`](https://jbgruber.github.io/rollama/index.html), which requires the software [Ollama](https://ollama.com/) to run the utiliyed model.
+The main analysis is done with [`rollama`](https://jbgruber.github.io/rollama/index.html), which requires the software [Ollama](https://ollama.com/) to run the utilised model.
 
 All other dependencies can be installed with:
 
